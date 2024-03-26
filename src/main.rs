@@ -2,6 +2,8 @@
 use eframe::egui; // This re-exports `egui`, making it available for use
 //use egui_plot::{Line, Plot, PlotImage, PlotPoint, PlotPoints, PlotResponse, Points};
 use egui_plot::{Line, Plot, PlotPoints};
+use std::f64::consts::{PI, TAU, E};
+
 
 
 fn main() {
@@ -30,6 +32,7 @@ struct MyApp {
     print_label: String,
     plot_pointer_pos: Option<[f64; 2]>,
     plot_selected_point: Option<usize>,
+    point_dragging_lock: bool,
 }
 
 
@@ -48,7 +51,7 @@ impl MyApp {
         self.env_range = [-1.0, 1.0];
         self.print_label = format!("Nothing to print!");
         self.plot_selected_point = None;
-
+        self.point_dragging_lock = false;
         self.update_lines();
         // Set up other fields or perform initial calculations...
     }
@@ -85,6 +88,8 @@ impl eframe::App for MyApp {
             ui.label(format!("Slider value: {}", self.slider_val));
             
             self.update_lines();
+
+            self.print_label = format!("Selected point {:?} , drag_lock status {}", self.plot_selected_point, self.point_dragging_lock);
             
             let plot = Plot::new("my_plot")
                 .view_aspect(2.0)
@@ -97,12 +102,12 @@ impl eframe::App for MyApp {
             
             let plot_response = plot.show(ui, |plot_ui| { 
                 
-                // let envelope = self.envelope.clone(); // cant remember why but you can't use it directly
+                // Envelope display
                 let mut sorted_envelope = self.envelope.clone();
                 sorted_envelope.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap());
                 plot_ui.line(Line::new(PlotPoints::from(sorted_envelope)).name("env"));
 
-                // sine wave
+                // Sine wave display (and mult by env)
                 let sin: PlotPoints = (0..1000).map(|i| {
                     let x = i as f64 * 0.001 * (self.env_domain[1] - self.env_domain[0]) + self.env_domain[0];
                     [x, { (x*(self.slider_val)).sin() * self.get_y(x) }]
@@ -111,46 +116,43 @@ impl eframe::App for MyApp {
                 let sin_line = Line::new(sin);
                 plot_ui.line(sin_line);
 
+                if let Some(sel_pt_idx) = self.plot_selected_point {
+                    let sel_point_display: PlotPoints = (0..=4).map(|i| {
+                        let t = ((i as f64)/4.0) * TAU;
+                        [(t.cos() * 0.01) + self.envelope[sel_pt_idx][0], (t.sin() * 0.04) + self.envelope[sel_pt_idx][1]]
+                    }).collect();
+                    plot_ui.line(Line::new(sel_point_display));
+                }
+                
 
-                // hovering ///
+                
+
+                // Hovering
+                // Also handles check distance to env points
                 if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
                     self.plot_pointer_pos = Some([pointer_pos.x, pointer_pos.y]);
-                    self.plot_selected_point = None;
-
-                    let threshold = 0.1; // Define a suitable threshold for closeness
+                    //self.plot_selected_point = None;
+                    
+                    let threshold = 0.05; // Define a suitable threshold for closeness
                     for (i, point) in self.envelope.iter().enumerate() {
-                        let distance = ((pointer_pos.x - point[0]).powi(2) + (pointer_pos.y - point[1]).powi(2)).sqrt();
-                        if distance < threshold {
-                            self.plot_selected_point = Some(i);
+                        if self.point_dragging_lock == false {
+                            self.plot_selected_point = None;
+                            let distance = ((pointer_pos.x - point[0]).powi(2) + (pointer_pos.y - point[1]).powi(2)).sqrt();
+                            if distance < threshold {
+                                self.plot_selected_point = Some(i);
+                                break;
+                            }
                         }
                     }
                 }
-                else {
-                    self.plot_pointer_pos = None;
-                    
-                }
-
             });
 
 
-            // Check if the plot was clicked
-            if plot_response.response.drag_started() {
-                if let Some(plot_pointer_pos) = self.plot_pointer_pos {
-                    // Convert hover position to plot coordinates
-                    // Now, you can check if this click was close to any of your points
-                    let threshold = 0.1; // Define a suitable threshold for closeness
-                    for (i, point) in self.envelope.iter().enumerate() {
-                        let distance = ((plot_pointer_pos[0] - point[0]).powi(2) + (plot_pointer_pos[1] - point[1]).powi(2)).sqrt();
-                        if distance < threshold {
-                            
-                            self.print_label = format!("Clicked near point {} at plot coordinates: {:?}", i, point);
-                            println!("Clicked near point {} at plot coordinates: {:?}", i, point);
-                            break; // Found a close point, exit the loop
-                        }
-                    }
-                }
+            
+            if plot_response.response.drag_started() {                                      // drag started
+                self.point_dragging_lock = true;
             }
-            else if plot_response.response.dragged() {
+            else if plot_response.response.dragged() {                                      // dragging
                 if let Some(plot_pointer_pos) = self.plot_pointer_pos {
                     if let Some(selected_point) = self.plot_selected_point {
                         //println!("dragging point {} to {} {}", selected_point, plot_pointer_pos[0], plot_pointer_pos[1]);
@@ -158,7 +160,8 @@ impl eframe::App for MyApp {
                     }
                 }    
             }
-            else if plot_response.response.drag_released() {
+            else if plot_response.response.drag_released() {                                // drag ended
+                self.point_dragging_lock = false;
                 self.plot_pointer_pos = None;
             }
             
@@ -168,13 +171,10 @@ impl eframe::App for MyApp {
                 if let Some(selected_point) = self.plot_selected_point {
                     println!("attempted delete point {}", selected_point);
                     self.envelope.remove(selected_point);
+                    self.plot_selected_point = None;
                 }
             }
 
-            // if plot_response.response.drag_released() {
-            //     self.plot_selected_point = None;
-            // }
-            
             if plot_response.response.clicked() {
                 if self.plot_selected_point == None {
                     if let Some(plot_pointer_pos) = self.plot_pointer_pos {
